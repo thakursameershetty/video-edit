@@ -810,9 +810,21 @@ function renderBlocks(
         // the tree is still mid-animation.
         if (revealed <= start) return <div key={i} />;
         return (
-          <div key={i}>
+          <motion.div
+            key={i}
+            // The tree's own bordered box has real size the instant it
+            // mounts (unlike the typed text around it, which grows in a
+            // character at a time) — popping in abruptly right as the card
+            // is still settling from its thinking-pill morph read as the
+            // tree fighting that animation. Fading + blurring it in instead
+            // gives it its own soft entrance once typing reaches this point
+            // (i.e. once the overview above has finished).
+            initial={{ opacity: 0, filter: "blur(8px)" }}
+            animate={{ opacity: 1, filter: "blur(0px)" }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+          >
             <RequirementTree data={b.data} onDone={ctx?.onTreeDone} />
-          </div>
+          </motion.div>
         );
       }
     }
@@ -1251,12 +1263,28 @@ function AITurnBox({
       transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
       className="relative w-full h-[63vh] rounded-3xl border border-[#1e1e24] bg-[#111114] px-5 sm:px-6 py-5 sm:py-6 overflow-hidden flex flex-col"
     >
-      <DocHeader title={title} onInvite={onInvite} />
-      <div ref={scrollRef} className={`flex-1 min-h-0 overflow-y-auto pr-1 ${NO_SCROLLBAR}`}>
-        <div className="flex flex-col gap-5 pb-1">
-          {renderBlocks(blocks, cursor, revealed, { onTreeDone: () => setTreeDone(true) })}
+      {/* Only the box above (border/background/radius) is what the shared
+          layoutId actually morphs — real content still stretches along with
+          it if it's visible for that growth, since Framer scales the whole
+          subtree via transform rather than truly resizing it. So for the
+          first card (the only one with a layoutId), its content stays
+          invisible while the box is still growing and only fades in once
+          the morph has essentially settled. Every later card has no
+          layoutId — its box never grows in place, so its content is visible
+          from the start with no such artifact to hide. */}
+      <motion.div
+        className="flex-1 min-h-0 flex flex-col"
+        initial={layoutId ? { opacity: 0 } : false}
+        animate={{ opacity: 1 }}
+        transition={layoutId ? { duration: 0.22, delay: 0.32, ease: "easeOut" } : { duration: 0 }}
+      >
+        <DocHeader title={title} onInvite={onInvite} />
+        <div ref={scrollRef} className={`flex-1 min-h-0 overflow-y-auto pr-1 ${NO_SCROLLBAR}`}>
+          <div className="flex flex-col gap-5 pb-1">
+            {renderBlocks(blocks, cursor, revealed, { onTreeDone: () => setTreeDone(true) })}
+          </div>
         </div>
-      </div>
+      </motion.div>
       <CompletionShimmer play={shimmerReady} />
     </motion.div>
   );
@@ -1768,12 +1796,21 @@ export default function AssistantVideoPage() {
           <div className="flex-1 flex flex-col min-h-0">
             <div ref={paneRef} className={`flex-1 overflow-y-auto px-6 py-8 ${NO_SCROLLBAR}`}>
               <div className="max-w-[690px] mx-auto flex flex-col gap-4">
-                <AnimatePresence initial={false}>
+                <AnimatePresence>
                   {messages.map((msg) => (
                     <motion.div
                       key={msg.id}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
+                      // Grows in from a small, blurred blob anchored at its own
+                      // bottom-right corner — roughly where the send button
+                      // sits just below it — instead of just fading/sliding up.
+                      // Kept self-contained (no shared layoutId with the input)
+                      // since the input lives in a different scrollable
+                      // container; a projection spanning that boundary would
+                      // get clipped by this pane's own overflow.
+                      initial={{ opacity: 0, scale: 0.4, y: 10, filter: "blur(6px)" }}
+                      animate={{ opacity: 1, scale: 1, y: 0, filter: "blur(0px)" }}
+                      transition={{ type: "spring", bounce: 0.3, duration: 0.5 }}
+                      style={{ transformOrigin: "bottom right" }}
                       className="self-end max-w-[85%] rounded-2xl rounded-tr-sm bg-white text-[#111114] px-4 py-2.5 text-[14px] font-medium"
                     >
                       {msg.text}
@@ -1915,7 +1952,7 @@ export default function AssistantVideoPage() {
                   top of whatever's behind it instead. */}
               <AnimatePresence>
                 {doneTurns.length > 0 && thinkingTurn !== null && (
-                  <div className="absolute inset-x-0 bottom-full mb-3 flex justify-center px-6 pointer-events-none">
+                  <div className="absolute inset-x-0 bottom-full mb-3 z-[999] flex justify-center px-6 pointer-events-none">
                     <ThinkingPill key={thinkingTurn} />
                   </div>
                 )}
