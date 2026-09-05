@@ -1271,7 +1271,7 @@ function AITurnBox({
 // input box, instead of living inside the card stack. A fresh instance is
 // mounted per turn (keyed by the caller), so its cycling always restarts
 // clean.
-function ThinkingPill({ layoutId }: { layoutId?: string }) {
+function ThinkingPill({ layoutId, hideContent }: { layoutId?: string; hideContent?: boolean }) {
   const [idx, setIdx] = useState(0);
 
   useEffect(() => {
@@ -1298,12 +1298,23 @@ function ThinkingPill({ layoutId }: { layoutId?: string }) {
       transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
       className="mx-auto inline-flex w-fit items-center gap-2.5 rounded-full border border-[#1e1e24] bg-[#111114] px-4 py-2.5"
     >
-      <span className="shrink-0 -ml-0.5 flex items-center justify-center [&_canvas]:!size-[18px]">
-        <ThinkingOrb state={current.orb} size={20} theme="dark" />
-      </span>
-      <span className="text-[13.5px] text-[#c8c8cc]">
-        <VanishText text={current.label} cycleKey={idx} />
-      </span>
+      {/* Kept separate from the outer box's own layoutId animation: when the
+          pill is about to morph into the card, this inner content fades+
+          blurs out on its own first, so the icon/text are already gone
+          before the shape starts growing instead of stretching along with
+          it. */}
+      <motion.div
+        className="flex items-center gap-2.5"
+        animate={{ opacity: hideContent ? 0 : 1, filter: hideContent ? "blur(6px)" : "blur(0px)" }}
+        transition={{ duration: 0.2, ease: "easeOut" }}
+      >
+        <span className="shrink-0 -ml-0.5 flex items-center justify-center [&_canvas]:!size-[18px]">
+          <ThinkingOrb state={current.orb} size={20} theme="dark" />
+        </span>
+        <span className="text-[13.5px] text-[#c8c8cc]">
+          <VanishText text={current.label} cycleKey={idx} />
+        </span>
+      </motion.div>
     </motion.div>
   );
 }
@@ -1494,6 +1505,10 @@ const AUTO_TYPE_TEXT =
 const AUTO_TYPE_CHAR_MS = 45;
 const THINKING_WAIT_MS = 5000; // each thinking pill iterates for ~5s before its card appears
 const AI_TURN_GAP_MS = 400; // brief pause after a card finishes typing+shimmer, before the next pill appears
+// How long before the first pill morphs into the card its own contents (icon
+// + text) get to fade+blur out — so they're already gone by the time the
+// shape starts growing, instead of stretching along with it.
+const PILL_CONTENT_FADE_MS = 220;
 
 export default function AssistantVideoPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1504,6 +1519,9 @@ export default function AssistantVideoPage() {
   // Which turn's pill is currently iterating (inline for the first turn,
   // pinned above the input after that) — or null if none is active.
   const [thinkingTurn, setThinkingTurn] = useState<number | null>(null);
+  // True for the brief window, right before the first pill morphs into its
+  // card, where the pill's own icon+text are fading out — see PILL_CONTENT_FADE_MS.
+  const [pillContentHidden, setPillContentHidden] = useState(false);
   const [isAutoTyping, setIsAutoTyping] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   // True once every AI turn has finished appearing, typing itself out, and
@@ -1580,6 +1598,17 @@ export default function AssistantVideoPage() {
   const startTurn = (i: number) => {
     if (i >= AI_TURNS.length) return;
     setThinkingTurn(i);
+    setPillContentHidden(false);
+    // Only the first turn's pill shares a layoutId and morphs into a card —
+    // give its contents a head start fading out so the shape-morph starts on
+    // an empty pill instead of visibly stretching the icon/text with it.
+    if (i === 0) {
+      const fadeId = setTimeout(
+        () => setPillContentHidden(true),
+        THINKING_WAIT_MS - PILL_CONTENT_FADE_MS,
+      );
+      turnTimeouts.current.push(fadeId);
+    }
     const id = setTimeout(() => {
       setThinkingTurn(null);
       setDoneTurns((prev) => [...prev, i]);
@@ -1789,7 +1818,11 @@ export default function AssistantVideoPage() {
               <AnimatePresence>
                 {doneTurns.length === 0 && thinkingTurn !== null && (
                   <div className="max-w-[690px] mx-auto mt-5">
-                    <ThinkingPill key={thinkingTurn} layoutId="assistant-first-reply" />
+                    <ThinkingPill
+                      key={thinkingTurn}
+                      layoutId="assistant-first-reply"
+                      hideContent={pillContentHidden}
+                    />
                   </div>
                 )}
               </AnimatePresence>
