@@ -278,11 +278,10 @@ function ReqLeafCard({ leaf }: { leaf: ReqTreeLeaf }) {
     <div className="w-max min-w-[168px] shrink-0 rounded-lg border border-[#1e1e24] bg-[#111114] px-3.5 py-2.5 flex flex-col gap-1.5">
       <div className="flex items-center gap-2.5">
         <span
-          className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border shrink-0 ${
-            leaf.type === "Component"
-              ? "text-[#7fd8a8] bg-[#123521]/60 border-[#1e5b39]"
-              : "text-[#8fb8e8] bg-[#101d2e]/60 border-[#1c3654]"
-          }`}
+          className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border shrink-0 ${leaf.type === "Component"
+            ? "text-[#7fd8a8] bg-[#123521]/60 border-[#1e5b39]"
+            : "text-[#8fb8e8] bg-[#101d2e]/60 border-[#1c3654]"
+            }`}
         >
           {leaf.type}
         </span>
@@ -722,20 +721,18 @@ function renderBlocks(
               className="shrink-0 w-[210px] rounded-xl border border-[#1e1e24] bg-[#0d0d10] overflow-hidden flex flex-col"
             >
               <div
-                className={`relative h-[110px] flex items-center justify-center ${
-                  it.image ? "bg-[#f2f2f0]" : "bg-gradient-to-br from-[#1c1c22] to-[#101013]"
-                }`}
+                className={`relative h-[110px] flex items-center justify-center ${it.image ? "bg-[#f2f2f0]" : "bg-gradient-to-br from-[#1c1c22] to-[#101013]"
+                  }`}
               >
 
                 <span className="absolute top-2 left-2 text-[10px] font-semibold text-[#c8c8cc] bg-[#1a1a1f]/90 border border-[#26262c] rounded-full px-1.5 py-0.5">
                   {it.version}
                 </span>
                 <span
-                  className={`absolute top-2 right-2 text-[10px] font-medium rounded-full px-1.5 py-0.5 border ${
-                    it.status === "Approved"
-                      ? "text-[#7fd8a8] bg-[#123521]/80 border-[#1e5b39]"
-                      : "text-[#a8a8ae] bg-[#1a1a1f]/90 border-[#26262c]"
-                  }`}
+                  className={`absolute top-2 right-2 text-[10px] font-medium rounded-full px-1.5 py-0.5 border ${it.status === "Approved"
+                    ? "text-[#7fd8a8] bg-[#123521]/80 border-[#1e5b39]"
+                    : "text-[#a8a8ae] bg-[#1a1a1f]/90 border-[#26262c]"
+                    }`}
                 >
                   {it.status}
                 </span>
@@ -1252,7 +1249,7 @@ function AITurnBox({
       // motion: Framer was blending an outgoing tween against an incoming
       // default spring.
       transition={{ type: "spring", bounce: 0.15, duration: 0.5 }}
-      className="relative w-full h-[56vh] rounded-2xl border border-[#1e1e24] bg-[#111114] px-6 sm:px-8 py-6 sm:py-7 overflow-hidden flex flex-col"
+      className="relative w-full h-[63vh] rounded-3xl border border-[#1e1e24] bg-[#111114] px-5 sm:px-6 py-5 sm:py-6 overflow-hidden flex flex-col"
     >
       <DocHeader title={title} onInvite={onInvite} />
       <div ref={scrollRef} className={`flex-1 min-h-0 overflow-y-auto pr-1 ${NO_SCROLLBAR}`}>
@@ -1642,20 +1639,6 @@ export default function AssistantVideoPage() {
     startTurn(0);
   };
 
-  const handleReset = () => {
-    autoTypeTimeouts.current.forEach(clearTimeout);
-    autoTypeTimeouts.current = [];
-    turnTimeouts.current.forEach(clearTimeout);
-    turnTimeouts.current = [];
-    setIsAutoTyping(false);
-    setMessages([]);
-    setInput("");
-    setDoneTurns([]);
-    setThinkingTurn(null);
-    setAllSettled(false);
-    setFocusedPos(0);
-  };
-
   // Triggered by clicking the idle-screen input: types the demo prompt out
   // character by character. Sending is left to the user (Enter or the send
   // button) — no auto-submit timer.
@@ -1718,15 +1701,6 @@ export default function AssistantVideoPage() {
             <span className="text-[10px] font-semibold tracking-wide text-[#6b6b76]">(BETA)</span>
           </div>
           <div className="flex items-center gap-1">
-            {started && (
-              <button
-                onClick={handleReset}
-                title="New chat"
-                className="w-9 h-9 rounded-full flex items-center justify-center text-[#6b6b76] hover:text-[#e8e8ea] hover:bg-[#151519] transition-colors"
-              >
-                <X size={17} />
-              </button>
-            )}
             <div className="w-9 h-9 rounded-full flex items-center justify-center text-[#6b6b76] hover:text-[#e8e8ea] hover:bg-[#151519] transition-colors">
               <Puzzle size={17} />
             </div>
@@ -1930,12 +1904,20 @@ export default function AssistantVideoPage() {
               <div ref={messagesEndRef} className="h-1" />
             </div>
 
-            <div className="shrink-0 px-6 pb-6 pt-2 flex flex-col items-center gap-3">
+            <div className="relative shrink-0 px-6 pb-6 pt-2 flex flex-col items-center">
               {/* From the second turn on, the thinking pill lives here —
-                  pinned above the input box — instead of inside the stack. */}
+                  floating just above the input box — instead of inside the
+                  stack. It's absolutely positioned (not a flex sibling of the
+                  input) so it never adds height to this footer: taking up
+                  flow space here would shrink the scroll area above by that
+                  same amount every time it mounts/unmounts, reading as the
+                  card stack "jumping" up and down. Floating it lets it sit on
+                  top of whatever's behind it instead. */}
               <AnimatePresence>
                 {doneTurns.length > 0 && thinkingTurn !== null && (
-                  <ThinkingPill key={thinkingTurn} />
+                  <div className="absolute inset-x-0 bottom-full mb-3 flex justify-center px-6 pointer-events-none">
+                    <ThinkingPill key={thinkingTurn} />
+                  </div>
                 )}
               </AnimatePresence>
               <InputPill value={input} onChange={setInput} onSubmit={() => handleSend()} compact />
@@ -2023,9 +2005,8 @@ function InputPill({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: compact ? 0 : 0.05 }}
-      className={`relative w-full max-w-[690px] rounded-[23px] overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.35)] ${
-        compact ? "border border-[#1e1e24]" : "p-[1.5px]"
-      }`}
+      className={`relative w-full max-w-[690px] rounded-[23px] overflow-hidden shadow-[0_8px_30px_rgba(0,0,0,0.35)] ${compact ? "border border-[#1e1e24]" : "p-[1.5px]"
+        }`}
     >
       {!compact && <BorderBeam duration={3.5} lightColor="#ffffff" lightWidth={220} />}
       <div className="relative z-10 rounded-[21.5px] bg-[#131316] px-5 pt-4 pb-3 flex flex-col gap-4">
