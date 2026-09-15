@@ -45,6 +45,8 @@ import {
   CheckCircle2,
   Clock3,
   Circle,
+  UserCheck,
+  FileDown,
   type LucideIcon,
 } from "lucide-react";
 
@@ -167,6 +169,24 @@ type ReqTreeLeaf = {
 type ReqTreeBranch = { label: string; leaves: ReqTreeLeaf[] };
 type ReqTreeData = { root: string; rootSub: string; branches: ReqTreeBranch[] };
 
+// `assignee` is a name key into KANBAN_AVATARS below, not free text — so the
+// card can render an actual teammate photo instead of a placeholder.
+type KanbanCard = { id: string; title: string; tag: string; assignee: string; date: string };
+type KanbanColumn = { title: string; cards: KanbanCard[] };
+type KanbanData = { columns: KanbanColumn[] };
+
+// Reuses the same real collaborator photos as the Invite panel (INVITE_MEMBERS
+// below) so a kanban card's assignee reads as an actual teammate, not a
+// generic initials blob.
+const KANBAN_AVATARS: Record<string, { avatar: string; initial: string }> = {
+  John: { avatar: "/assets/profile.jpg", initial: "J" },
+  Noah: { avatar: "/assets/collaborators/noah.jpg", initial: "N" },
+  Mariana: { avatar: "/assets/collaborators/mariana.jpg", initial: "M" },
+  Jonathan: { avatar: "/assets/collaborators/jonathan.jpg", initial: "J" },
+  Ana: { avatar: "/assets/collaborators/ana.jpg", initial: "A" },
+  Marcus: { avatar: "/assets/collaborators/marcus.jpg", initial: "M" },
+};
+
 type DocBlock =
   | { kind: "section"; heading: string; children: DocBlock[] }
   | { kind: "p"; text: string }
@@ -174,7 +194,8 @@ type DocBlock =
   | { kind: "spec"; rows: { label: string; value: string }[] }
   | { kind: "bom"; rows: { item: string; qty: string; cost: string }[]; total: string }
   | { kind: "bomCards"; items: BomCardItem[]; total: string }
-  | { kind: "reqTree"; data: ReqTreeData; weight: number };
+  | { kind: "reqTree"; data: ReqTreeData; weight: number }
+  | { kind: "kanban"; data: KanbanData; weight: number };
 
 function section(heading: string, children: DocBlock[]): DocBlock {
   return { kind: "section", heading, children };
@@ -198,9 +219,22 @@ function bomCards(items: BomCardItem[], total: string): DocBlock {
 function reqTree(data: ReqTreeData, weight = 480): DocBlock {
   return { kind: "reqTree", data, weight };
 }
+// Same reveal-budget rationale as reqTree above — the kanban board reveals
+// column by column, card by card, rather than typing character by character.
+function kanban(data: KanbanData, weight = 480): DocBlock {
+  return { kind: "kanban", data, weight };
+}
 
-function blockHasReqTree(blocks: DocBlock[]): boolean {
-  return blocks.some((b) => b.kind === "reqTree" || (b.kind === "section" && blockHasReqTree(b.children)));
+// Blocks that run their own multi-step reveal animation (rather than typing
+// character by character) — the card's scroll/shimmer settling has to wait
+// for these to actually finish, not just for the text-typing budget to run out.
+function blockHasCustomReveal(blocks: DocBlock[]): boolean {
+  return blocks.some(
+    (b) =>
+      b.kind === "reqTree" ||
+      b.kind === "kanban" ||
+      (b.kind === "section" && blockHasCustomReveal(b.children)),
+  );
 }
 
 // Sums the length of every piece of "typeable" text in a block tree, in the
@@ -239,6 +273,8 @@ function blockTextLength(blocks: DocBlock[]): number {
           b.total.length
         );
       case "reqTree":
+        return sum + b.weight;
+      case "kanban":
         return sum + b.weight;
     }
   }, 0);
@@ -512,6 +548,394 @@ function RequirementTree({ data, onDone }: { data: ReqTreeData; onDone?: () => v
   );
 }
 
+const KANBAN_TAG_STYLES: Record<string, string> = {
+  Chassis: "text-[#8fb8e8] bg-[#101d2e]/60 border-[#1c3654]",
+  Power: "text-[#e8b374] bg-[#2a1f10]/60 border-[#3d2e18]",
+  Navigation: "text-[#c79bf0] bg-[#2a1f3d]/70 border-[#3d2a54]",
+  Payload: "text-[#7fd8a8] bg-[#123521]/60 border-[#1e5b39]",
+  Safety: "text-[#f0a8a8] bg-[#331414]/60 border-[#4d1e1e]",
+  Ops: "text-[#a8a8ae] bg-[#1a1a1f] border-[#26262c]",
+};
+
+function KanbanTagBadge({ tag }: { tag: string }) {
+  const style = KANBAN_TAG_STYLES[tag] ?? KANBAN_TAG_STYLES.Ops;
+  return (
+    <span className={`text-[9px] font-medium rounded-full px-1.5 py-0.5 border shrink-0 ${style}`}>{tag}</span>
+  );
+}
+
+// The little mark-complete toggle in each card's corner — a plain circle
+// that fills in with a check once clicked. Not tied to the column a card
+// sits in (that's status), just a lightweight "I've looked at this" tick
+// the user can set on any card, in any column.
+function KanbanCheckToggle({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      aria-pressed={checked}
+      aria-label={checked ? "Mark task incomplete" : "Mark task complete"}
+      className="shrink-0 -m-1 p-1 rounded-full text-[#4a4a52] hover:text-[#8b8b93] transition-colors"
+    >
+      {checked ? <CheckCircle2 size={15} className="text-[#7fd8a8]" /> : <Circle size={15} />}
+    </button>
+  );
+}
+
+function KanbanCardTile({
+  card,
+  checked,
+  onToggle,
+  assignedToMe,
+}: {
+  card: KanbanCard;
+  checked: boolean;
+  onToggle: () => void;
+  assignedToMe: boolean;
+}) {
+  const person = assignedToMe ? KANBAN_AVATARS.John : KANBAN_AVATARS[card.assignee];
+
+  return (
+    <div
+      className={`w-full rounded-lg border bg-[#111114] px-3 py-2.5 flex flex-col gap-2 transition-colors ${checked ? "border-[#1e5b39]/60" : "border-[#1e1e24]"
+        }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <KanbanCheckToggle checked={checked} onToggle={onToggle} />
+          <span className="text-[9px] text-[#6b6b76] whitespace-nowrap">{card.id}</span>
+        </div>
+        <KanbanTagBadge tag={card.tag} />
+      </div>
+      <p
+        className={`text-[11.5px] font-medium leading-snug transition-colors ${checked ? "text-[#6b6b76] line-through" : "text-[#e8e8ea]"
+          }`}
+      >
+        {card.title}
+      </p>
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#1e1e24]">
+        <img
+          src={person.avatar}
+          alt={assignedToMe ? "You" : card.assignee}
+          title={assignedToMe ? "You" : card.assignee}
+          className="h-5 w-5 rounded-full object-cover shrink-0 ring-1 ring-[#26262c]"
+        />
+        <span className="text-[9.5px] text-[#6b6b76] whitespace-nowrap">{card.date}</span>
+      </div>
+    </div>
+  );
+}
+
+// One step in the kanban board's reveal sequence — either a column heading
+// appearing, or a single card appearing within whichever column it belongs
+// to. Mirrors flattenTreeSteps above: a linear list of steps lets the same
+// "reveal one, wait, reveal the next" timer drive both animations.
+type KanbanStep = { kind: "column"; ci: number } | { kind: "card"; ci: number; cj: number };
+
+function flattenKanbanSteps(data: KanbanData): KanbanStep[] {
+  const steps: KanbanStep[] = [];
+  data.columns.forEach((col, ci) => {
+    steps.push({ kind: "column", ci });
+    col.cards.forEach((_, cj) => steps.push({ kind: "card", ci, cj }));
+  });
+  return steps;
+}
+
+// Builds a CSV of every card (column, id, title, tag, assignee) and triggers
+// a real browser download — client-side only, no backend to export from.
+function downloadKanbanCsv(data: KanbanData, assignedAll: boolean) {
+  const header = "Column,ID,Title,Tag,Assignee";
+  const rows = data.columns.flatMap((col) =>
+    col.cards.map((card) => {
+      const assignee = assignedAll ? "You" : card.assignee;
+      const escapedTitle = card.title.includes(",") ? `"${card.title}"` : card.title;
+      return [col.title, card.id, escapedTitle, card.tag, assignee].join(",");
+    }),
+  );
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "rover-task-board.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// The action row under the board, once it's finished revealing — a primary
+// CTA to open the full task board plus a couple of genuinely useful
+// secondary actions (assign everything to the current user, export what's
+// on the board), all only cosmetic-adjacent: no backend, but every click
+// does something real and visible.
+function KanbanActionsRow({
+  onOpenBoard,
+  onToggleAssignAll,
+  assignedAll,
+  onExport,
+}: {
+  onOpenBoard: () => void;
+  onToggleAssignAll: () => void;
+  assignedAll: boolean;
+  onExport: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="flex flex-wrap items-center gap-2 pt-1"
+    >
+      <button
+        type="button"
+        onClick={onOpenBoard}
+        className="flex items-center gap-1.5 h-8 px-3.5 rounded-full bg-white text-[12px] font-medium text-black hover:bg-[#e8e8ea] transition-colors"
+      >
+        <FolderKanban size={13} />
+        Open Task Board
+      </button>
+      <button
+        type="button"
+        onClick={onToggleAssignAll}
+        aria-pressed={assignedAll}
+        className={`flex items-center gap-1.5 h-8 px-3 rounded-full border text-[12px] transition-colors ${assignedAll
+          ? "border-[#3d2e18] bg-[#241d12] text-[#e8b374]"
+          : "border-[#26262c] bg-[#1a1a1f] text-[#a8a8ae] hover:text-white hover:bg-[#202027]"
+          }`}
+      >
+        <UserCheck size={13} />
+        {assignedAll ? "Assigned" : "Assign"}
+      </button>
+      <button
+        type="button"
+        onClick={onExport}
+        className="flex items-center gap-1.5 h-8 px-3 rounded-full border border-[#26262c] bg-[#1a1a1f] text-[12px] text-[#a8a8ae] hover:text-white hover:bg-[#202027] transition-colors"
+      >
+        <FileDown size={13} />
+        Export CSV
+      </button>
+    </motion.div>
+  );
+}
+
+// The full task board, opened via "Open Task Board" — every column and card
+// shown at once (no staged reveal, this is a working view, not a reply
+// being typed out), sharing the same check-toggle and assign-all state as
+// the inline board so ticking a card here or there stays in sync.
+function TaskBoardModal({
+  data,
+  checkedIds,
+  onToggleCard,
+  assignedAll,
+  onClose,
+}: {
+  data: KanbanData;
+  checkedIds: Set<string>;
+  onToggleCard: (id: string) => void;
+  assignedAll: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md px-4 py-8"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.97, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 8 }}
+        transition={{ type: "spring", bounce: 0.15, duration: 0.4 }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[980px] max-h-full rounded-[24px] border border-[#1e1e24] bg-[#111114] shadow-[0_24px_60px_rgba(0,0,0,0.5)] flex flex-col overflow-hidden"
+      >
+        <div className="relative flex items-center justify-center px-5 pt-4 pb-3 border-b border-[#1e1e24] shrink-0">
+          <h2 className="text-[15px] font-semibold text-white">Task Board</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-full text-[#6b6b76] hover:bg-[#1c1c22] hover:text-white transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className={`flex gap-3 overflow-x-auto p-5 ${NO_SCROLLBAR}`}>
+          {data.columns.map((col, ci) => (
+            <div
+              key={ci}
+              className="w-[220px] shrink-0 rounded-xl border border-[#1e1e24] bg-[#0d0d10] p-2.5 flex flex-col gap-2"
+            >
+              <div className="flex items-center justify-between px-0.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8b8b93]">{col.title}</p>
+                <span className="text-[9.5px] text-[#6b6b76]">{col.cards.length}</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {col.cards.map((card, cj) => (
+                  <KanbanCardTile
+                    key={cj}
+                    card={card}
+                    checked={checkedIds.has(card.id)}
+                    onToggle={() => onToggleCard(card.id)}
+                    assignedToMe={assignedAll}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// A "completely done" project-planning board: columns (Backlog, To Do, In
+// Progress, In Review, Done, ...) appear left to right, then each column's
+// cards drop in one at a time top to bottom — same reveal-timer shape as
+// RequirementTree above, just laid out as columns instead of a branching
+// tree, since a kanban board reads naturally left-to-right/top-to-bottom
+// rather than needing connector lines. Once fully revealed, an action row
+// appears below it with a real "Open Task Board" modal plus a couple of
+// genuinely functional shortcuts (assign-all, CSV export) — and every card,
+// staged or in the modal, gets its own mark-complete toggle.
+function KanbanBoard({ data, onDone }: { data: KanbanData; onDone?: () => void }) {
+  const steps = useMemo(() => flattenKanbanSteps(data), [data]);
+  const [revealCount, setRevealCount] = useState(0);
+  const [boardDone, setBoardDone] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [assignedAll, setAssignedAll] = useState(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  const firedDoneRef = useRef(false);
+
+  const toggleCard = (id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    firedDoneRef.current = false;
+    setRevealCount(0);
+    setBoardDone(false);
+
+    const revealNext = (count: number) => {
+      if (cancelled) return;
+      setRevealCount(count);
+      if (count >= steps.length) {
+        if (!firedDoneRef.current) {
+          firedDoneRef.current = true;
+          setBoardDone(true);
+          timeouts.push(setTimeout(() => !cancelled && onDoneRef.current?.(), 300));
+        }
+        return;
+      }
+      const justShown = count > 0 ? steps[count - 1] : null;
+      const delay = justShown?.kind === "column" ? 260 : 130;
+      timeouts.push(setTimeout(() => revealNext(count + 1), delay));
+    };
+    timeouts.push(setTimeout(() => revealNext(1), 260));
+
+    return () => {
+      cancelled = true;
+      timeouts.forEach(clearTimeout);
+    };
+  }, [steps]);
+
+  let stepIndex = -1;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className={`kanban-scroll flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 ${NO_SCROLLBAR}`}>
+        {data.columns.map((col, ci) => {
+          stepIndex += 1;
+          const columnIdx = stepIndex;
+          const columnVisible = revealCount > columnIdx;
+          if (!columnVisible) {
+            stepIndex += col.cards.length;
+            return null;
+          }
+          return (
+            <motion.div
+              key={ci}
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+              className="w-[180px] shrink-0 rounded-xl border border-[#1e1e24] bg-[#0d0d10] p-2.5 flex flex-col gap-2"
+            >
+              <div className="flex items-center justify-between px-0.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#8b8b93]">{col.title}</p>
+                <span className="text-[9.5px] text-[#6b6b76]">{col.cards.length}</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {col.cards.map((card, cj) => {
+                  stepIndex += 1;
+                  const cardIdx = stepIndex;
+                  const cardVisible = revealCount > cardIdx;
+                  if (!cardVisible) return null;
+                  return (
+                    <motion.div
+                      key={cj}
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.25 }}
+                    >
+                      <KanbanCardTile
+                        card={card}
+                        checked={checkedIds.has(card.id)}
+                        onToggle={() => toggleCard(card.id)}
+                        assignedToMe={assignedAll}
+                      />
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {boardDone && (
+        // Sticky to the bottom of the card's own scroll container (not the
+        // page) so these stay reachable without scrolling down through the
+        // rest of the document, the same way DocHeader stays pinned at the
+        // top of the card.
+        <div className="sticky bottom-0 -mb-1 pt-3 pb-1 bg-gradient-to-t from-[#111114] via-[#111114] to-transparent">
+          <KanbanActionsRow
+            onOpenBoard={() => setBoardOpen(true)}
+            onToggleAssignAll={() => setAssignedAll((v) => !v)}
+            assignedAll={assignedAll}
+            onExport={() => downloadKanbanCsv(data, assignedAll)}
+          />
+        </div>
+      )}
+
+      <AnimatePresence>
+        {boardOpen && (
+          <TaskBoardModal
+            data={data}
+            checkedIds={checkedIds}
+            onToggleCard={toggleCard}
+            assignedAll={assignedAll}
+            onClose={() => setBoardOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 // A single typed span: purely a function of its own props (start + revealed)
 // — no side effects during render. Shows text.slice(0, revealed - start) and
 // draws a blinking caret exactly at the point where typing currently is.
@@ -618,7 +1042,7 @@ function BomCardsRow({ cards, total }: { cards: ReactNode[]; total: ReactNode })
   );
 }
 
-type RenderBlocksCtx = { onTreeDone?: () => void };
+type RenderBlocksCtx = { onDone?: () => void };
 
 function renderBlocks(
   blocks: DocBlock[],
@@ -805,7 +1229,7 @@ function renderBlocks(
         // Unlike the rest of the document, the tree doesn't type itself out
         // character by character — it waits its turn in the reveal sequence
         // like everything else, but once it starts it runs its own node-by-
-        // node reveal animation and reports back via onTreeDone when that's
+        // node reveal animation and reports back via onDone when that's
         // actually finished, so the card doesn't reset scroll/shimmer while
         // the tree is still mid-animation.
         if (revealed <= start) return <div key={i} />;
@@ -823,7 +1247,23 @@ function renderBlocks(
             animate={{ opacity: 1, filter: "blur(0px)" }}
             transition={{ duration: 0.4, ease: "easeOut" }}
           >
-            <RequirementTree data={b.data} onDone={ctx?.onTreeDone} />
+            <RequirementTree data={b.data} onDone={ctx?.onDone} />
+          </motion.div>
+        );
+      }
+      case "kanban": {
+        const start = consume(cursor, b.weight);
+        // Same deal as reqTree above — its own column-by-column, card-by-card
+        // reveal, not character typing.
+        if (revealed <= start) return <div key={i} />;
+        return (
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, filter: "blur(8px)" }}
+            animate={{ opacity: 1, filter: "blur(0px)" }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+          >
+            <KanbanBoard data={b.data} onDone={ctx?.onDone} />
           </motion.div>
         );
       }
@@ -951,6 +1391,60 @@ const AI_TURNS: { title: string; blocks: DocBlock[] }[] = [
                 { type: "Subsystem", id: "GND-001", label: "Charging dock interface", status: "Draft", verification: "Not Verified" },
                 { type: "Subsystem", id: "GND-002", label: "Fleet tracking beacon", status: "Reviewed", verification: "Passed" },
                 { type: "Subsystem", id: "GND-003", label: "Firmware OTA updates", status: "Draft", verification: "Not Verified" },
+              ],
+            },
+          ],
+        }),
+      ]),
+    ],
+  },
+  {
+    title: "Project Planning",
+    blocks: [
+      section("Overview", [
+        p(
+          "Here's the current build plan laid out as a board, tracking every subsystem task from backlog through to done.",
+        ),
+      ]),
+      section("Task Board", [
+        kanban({
+          columns: [
+            {
+              title: "Backlog",
+              cards: [
+                { id: "CHS-101", title: "Finalize suspension geometry", tag: "Chassis", assignee: "Noah", date: "Sep 22" },
+                { id: "SAF-101", title: "Define geofence boundary rules", tag: "Safety", assignee: "Mariana", date: "Sep 24" },
+                { id: "OPS-101", title: "Draft field service checklist", tag: "Ops", assignee: "Marcus", date: "Sep 26" },
+              ],
+            },
+            {
+              title: "To Do",
+              cards: [
+                { id: "PWR-101", title: "Source swappable battery packs", tag: "Power", assignee: "Noah", date: "Sep 18" },
+                { id: "NAV-101", title: "Order secondary GPS antenna", tag: "Navigation", assignee: "Jonathan", date: "Sep 19" },
+              ],
+            },
+            {
+              title: "In Progress",
+              cards: [
+                { id: "CHS-002", title: "Motor & gearbox sizing", tag: "Chassis", assignee: "Noah", date: "Sep 16" },
+                { id: "PLD-002", title: "Release mechanism assembly", tag: "Payload", assignee: "Mariana", date: "Sep 16" },
+                { id: "SAF-001", title: "Obstacle avoidance tuning", tag: "Safety", assignee: "Marcus", date: "Sep 17" },
+              ],
+            },
+            {
+              title: "In Review",
+              cards: [
+                { id: "NAV-002", title: "GPS + IMU redundancy check", tag: "Navigation", assignee: "Jonathan", date: "Sep 13" },
+                { id: "PWR-002", title: "Power distribution board", tag: "Power", assignee: "Noah", date: "Sep 14" },
+              ],
+            },
+            {
+              title: "Done",
+              cards: [
+                { id: "CHS-001", title: "Six-wheel chassis approved", tag: "Chassis", assignee: "Noah", date: "Sep 8" },
+                { id: "SAF-002", title: "Return-to-base failsafe", tag: "Safety", assignee: "Marcus", date: "Sep 10" },
+                { id: "PLD-001", title: "Payload bay (2.5kg) approved", tag: "Payload", assignee: "Mariana", date: "Sep 12" },
               ],
             },
           ],
@@ -1177,13 +1671,13 @@ function AITurnBox({
   // scrolling back to revisit an already-finished card (isFront flipping
   // true again) would replay it every time.
   const hasPlayedShimmerRef = useRef(false);
-  // A requirements tree runs its own node-by-node reveal animation, separate
-  // from the character-based typewriter above — the card shouldn't reset
-  // scroll/fire the shimmer just because the *text* budget ran out while the
-  // tree is still mid-animation. Defaults to already-done for every document
-  // that doesn't have one.
-  const hasTree = useMemo(() => blockHasReqTree(blocks), [blocks]);
-  const [treeDone, setTreeDone] = useState(!hasTree);
+  // A requirements tree or kanban board runs its own multi-step reveal
+  // animation, separate from the character-based typewriter above — the card
+  // shouldn't reset scroll/fire the shimmer just because the *text* budget
+  // ran out while that animation is still mid-flight. Defaults to
+  // already-done for every document that doesn't have one.
+  const hasCustomReveal = useMemo(() => blockHasCustomReveal(blocks), [blocks]);
+  const [customRevealDone, setCustomRevealDone] = useState(!hasCustomReveal);
 
   // Every new card gets a fresh scroll position at the top — explicit so
   // it doesn't depend on incidental DOM defaults or the follow-effect below
@@ -1215,17 +1709,18 @@ function AITurnBox({
   // bill-of-materials images) that finishes laying out a frame late and
   // would otherwise nudge scrollHeight/scrollTop again right after this runs.
   useEffect(() => {
-    if (!done || !treeDone) return;
+    if (!done || !customRevealDone) return;
     const el = scrollRef.current;
     if (!el) return;
     // Typing the bill-of-materials cards drags their own horizontal row
     // along with it (the caret's scrollIntoView follows it card by card), and
-    // the requirements tree's own reveal animation does the same to its
-    // horizontal strip — both are left scrolled over to whichever card/node
-    // was last revealed instead of back at the start once things finish.
+    // the requirements tree/kanban board's own reveal animation does the same
+    // to their horizontal strips — all are left scrolled over to whichever
+    // card/node was last revealed instead of back at the start once things
+    // finish.
     const resetScrolls = () => {
       el.scrollTop = 0;
-      el.querySelectorAll<HTMLDivElement>(".bom-scroll-row, .req-tree-scroll").forEach((row) => {
+      el.querySelectorAll<HTMLDivElement>(".bom-scroll-row, .req-tree-scroll, .kanban-scroll").forEach((row) => {
         row.scrollLeft = 0;
       });
     };
@@ -1240,7 +1735,7 @@ function AITurnBox({
       };
     }
     return () => cancelAnimationFrame(raf);
-  }, [done, treeDone, isFront]);
+  }, [done, customRevealDone, isFront]);
 
   // Let the completion shimmer actually play out before telling the parent
   // this card is "settled" — the next turn's thinking pill shouldn't
@@ -1281,7 +1776,7 @@ function AITurnBox({
         <DocHeader title={title} onInvite={onInvite} />
         <div ref={scrollRef} className={`flex-1 min-h-0 overflow-y-auto pr-1 ${NO_SCROLLBAR}`}>
           <div className="flex flex-col gap-5 pb-1">
-            {renderBlocks(blocks, cursor, revealed, { onTreeDone: () => setTreeDone(true) })}
+            {renderBlocks(blocks, cursor, revealed, { onDone: () => setCustomRevealDone(true) })}
           </div>
         </div>
       </motion.div>
