@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import AssistantVideoPage from './pages/AssistantVideoPage';
+import AutonomousRoverVideoPage from './pages/AutonomousRoverVideoPage';
 import { useTabRecorder } from './hooks/useTabRecorder';
 
 export default function App() {
@@ -19,6 +20,10 @@ export default function App() {
   useEffect(() => {
     document.title = isRecording ? '● Recording — Assistant' : 'Assistant';
   }, [isRecording]);
+
+  if (window.location.pathname === '/autonomus-rover') {
+    return <AutonomousRoverVideoPage />;
+  }
 
   return <AssistantVideoPage />;
 }
